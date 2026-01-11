@@ -1,0 +1,110 @@
+{{ define "guest.html" }}
+<section class="card">
+  <h1>Guest Portal</h1>
+  <p class="muted">Create a maintenance ticket for your room. Room is enforced from your login.</p>
+
+  <div class="row">
+    <div class="pill">You: <span id="me">loading…</span></div>
+    <button id="logout" class="secondary">Logout</button>
+  </div>
+
+  <form id="ticketForm" class="grid" style="margin-top:12px;">
+    <label>
+      Type
+      <select name="type" required>
+        <option value="plumbing">plumbing</option>
+        <option value="ac">ac</option>
+        <option value="noise">noise</option>
+        <option value="cleaning">cleaning</option>
+        <option value="wifi">wifi</option>
+        <option value="other">other</option>
+      </select>
+    </label>
+
+    <label class="full">
+      Description
+      <textarea name="description" placeholder="Describe the issue..." required></textarea>
+    </label>
+
+    <div class="full">
+      <button type="submit">Create Ticket</button>
+      <span id="msg" class="muted"></span>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <div class="row">
+    <h2>Your Tickets</h2>
+    <button id="refresh" class="secondary">Refresh</button>
+  </div>
+  <div id="tickets"></div>
+</section>
+
+<script>
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const out = await res.json().catch(()=> ({}));
+  return {res, out};
+}
+
+async function loadMe() {
+  const {res, out} = await api('/api/me');
+  if (!res.ok) { location.href='/login'; return null; }
+  document.getElementById('me').textContent = `${out.username} (${out.role}) room=${out.room||'-'}`;
+  return out;
+}
+
+async function fetchTickets() {
+  const {res, out} = await api('/api/tickets');
+  const el = document.getElementById('tickets');
+  if (!res.ok) { el.innerHTML = `<p class="muted">${esc(out.error||'error')}</p>`; return; }
+  if (!Array.isArray(out) || out.length===0) { el.innerHTML='<p class="muted">No tickets yet.</p>'; return; }
+
+  el.innerHTML = out.map(t => `
+    <div class="issue">
+      <div class="issue-head">
+        <div class="badge">${esc(t.type)}</div>
+        <div class="muted">#${t.id} • room ${esc(t.room)} • ${new Date(t.created_at).toLocaleString()}</div>
+        <div class="status">${esc(t.status)}</div>
+      </div>
+      <div class="issue-body">${esc(t.description)}</div>
+      <div class="muted">assigned_to: ${t.assigned_to_user_id ?? '-'}</div>
+    </div>
+  `).join('');
+}
+
+document.getElementById('refresh').addEventListener('click', fetchTickets);
+
+document.getElementById('ticketForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const msg = document.getElementById('msg');
+  msg.textContent='creating...';
+
+  const fd = new FormData(e.target);
+  const payload = {type: fd.get('type'), description: fd.get('description')};
+
+  const {res, out} = await api('/api/tickets', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) { msg.textContent = out.error || 'error'; return; }
+  msg.textContent = `created ticket #${out.id}`;
+  e.target.reset();
+  fetchTickets();
+});
+
+document.getElementById('logout').addEventListener('click', async ()=>{
+  await api('/api/auth/logout', {method:'POST'});
+  location.href='/login';
+});
+
+loadMe();
+fetchTickets();
+setInterval(fetchTickets, 10000);
+</script>
+{{ end }}

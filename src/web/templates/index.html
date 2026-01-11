@@ -1,0 +1,104 @@
+{{ define "index.html" }}
+<section class="card">
+  <h1>Report a Dorm Issue</h1>
+  <p class="muted">Submit an issue. It will be stored in SQLite and an MQTT event will be published.</p>
+
+  <form id="issueForm" class="grid">
+    <label>
+      Type
+      <select name="type" required>
+        <option value="leak">leak</option>
+        <option value="noise">noise</option>
+        <option value="heating">heating</option>
+        <option value="other">other</option>
+      </select>
+    </label>
+
+    <label>
+      Room
+      <input name="room" placeholder="e.g., B-203" required />
+    </label>
+
+    <label class="full">
+      Description
+      <textarea name="description" placeholder="Describe the problem..." required></textarea>
+    </label>
+
+    <div class="full">
+      <button type="submit">Create Issue</button>
+      <span id="formMsg" class="muted"></span>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <div class="row">
+    <h2>Latest Issues</h2>
+    <button id="refreshBtn" class="secondary">Refresh</button>
+  </div>
+  <div id="issues"></div>
+</section>
+
+<script>
+async function fetchIssues() {
+  const res = await fetch('/api/issues');
+  const data = await res.json();
+  const el = document.getElementById('issues');
+
+  if (!Array.isArray(data) || data.length === 0) {
+    el.innerHTML = '<p class="muted">No issues yet.</p>';
+    return;
+  }
+
+  el.innerHTML = data.map(i => `
+    <div class="issue">
+      <div class="issue-head">
+        <div class="badge">${escapeHtml(i.type)}</div>
+        <div class="muted">#${i.id} • ${escapeHtml(i.room)} • ${new Date(i.created_at).toLocaleString()}</div>
+        <div class="status">${escapeHtml(i.status)}</div>
+      </div>
+      <div class="issue-body">${escapeHtml(i.description)}</div>
+    </div>
+  `).join('');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+document.getElementById('refreshBtn').addEventListener('click', fetchIssues);
+
+document.getElementById('issueForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const msg = document.getElementById('formMsg');
+  msg.textContent = '';
+
+  const fd = new FormData(e.target);
+  const payload = {
+    type: fd.get('type'),
+    room: fd.get('room'),
+    description: fd.get('description')
+  };
+
+  const res = await fetch('/api/issues', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  });
+
+  const out = await res.json();
+  if (!res.ok) {
+    msg.textContent = out.error || 'Error creating issue';
+    return;
+  }
+
+  e.target.reset();
+  msg.textContent = `Created issue #${out.id}`;
+  fetchIssues();
+});
+
+fetchIssues();
+// simple polling is allowed
+setInterval(fetchIssues, 8000);
+</script>
+{{ end }}

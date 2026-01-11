@@ -1,0 +1,223 @@
+{{ define "admin.html" }}
+<section class="card">
+  <h1>Admin Dashboard</h1>
+  <p class="muted">See all tickets, assign to staff, and update statuses. Live MQTT events appear via SSE.</p>
+
+  <div class="row">
+    <div class="pill">You: <span id="me">loading…</span></div>
+    <div class="pill">SSE: <span id="sseStatus">connecting…</span></div>
+    <button id="logout" class="secondary">Logout</button>
+  </div>
+
+  <div class="grid2" style="margin-top:12px;">
+    <div>
+      <h2>Live Events</h2>
+      <div id="events" class="events"></div>
+    </div>
+
+    <div>
+      <h2>Create User</h2>
+      <form id="createUserForm" class="grid">
+        <label>
+          Role
+          <select name="role" required>
+            <option value="GUEST">GUEST</option>
+            <option value="STAFF">STAFF</option>
+          </select>
+        </label>
+        <label>
+          Username
+          <input name="username" placeholder="e.g. room-203 or staff-ali" required />
+        </label>
+        <label id="roomLabel">
+          Room (for guest)
+          <input name="room" placeholder="203" />
+        </label>
+        <label>
+          Password / PIN
+          <input name="password" required />
+        </label>
+        <div class="full">
+          <button type="submit">Create</button>
+          <span id="createUserMsg" class="muted"></span>
+        </div>
+      </form>
+
+      <h2 style="margin-top:12px;">Staff List</h2>
+      <button id="refreshStaff" class="secondary">Refresh Staff</button>
+      <div id="staffList" class="muted"></div>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="row">
+    <h2>All Tickets</h2>
+    <button id="refreshTickets" class="secondary">Refresh</button>
+  </div>
+  <div id="tickets"></div>
+</section>
+
+<script>
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const out = await res.json().catch(()=> ({}));
+  return {res, out};
+}
+
+let staff = [];
+
+async function loadMe() {
+  const {res, out} = await api('/api/me');
+  if (!res.ok || out.role !== 'ADMIN') { location.href='/login'; return; }
+  document.getElementById('me').textContent = `${out.username} (${out.role})`;
+}
+
+async function loadStaff() {
+  const {res, out} = await api('/api/admin/staff');
+  const el = document.getElementById('staffList');
+  if (!res.ok) { el.textContent = out.error || 'error'; staff=[]; return; }
+  staff = out.users || [];
+  if (staff.length === 0) { el.textContent = 'No staff created yet.'; return; }
+  el.innerHTML = staff.map(s => `<div>#${s.id} ${esc(s.username)}</div>`).join('');
+}
+
+async function fetchTickets() {
+  const {res, out} = await api('/api/tickets');
+  const el = document.getElementById('tickets');
+  if (!res.ok) { el.innerHTML = `<p class="muted">${esc(out.error||'error')}</p>`; return; }
+  if (!Array.isArray(out) || out.length===0) { el.innerHTML='<p class="muted">No tickets yet.</p>'; return; }
+
+  el.innerHTML = out.map(t => `
+    <div class="issue">
+      <div class="issue-head">
+        <div class="badge">${esc(t.type)}</div>
+        <div class="muted">#${t.id} • room ${esc(t.room)} • ${new Date(t.created_at).toLocaleString()}</div>
+        <div class="status">${esc(t.status)}</div>
+      </div>
+      <div class="issue-body">${esc(t.description)}</div>
+
+      <div class="row">
+        <label class="muted">Assign to</label>
+        <select data-id="${t.id}" class="assignSelect">
+          <option value="">(unassigned)</option>
+          ${staff.map(s => `<option value="${s.id}" ${t.assigned_to_user_id==s.id?'selected':''}>#${s.id} ${esc(s.username)}</option>`).join('')}
+        </select>
+        <button class="secondary assignBtn" data-id="${t.id}">Assign</button>
+        <span class="muted" id="assignMsg-${t.id}"></span>
+      </div>
+
+      <div class="row">
+        <label class="muted">Status</label>
+        <select data-id="${t.id}" class="statusSelect">
+          <option value="OPEN" ${t.status==="OPEN"?"selected":""}>OPEN</option>
+          <option value="IN_PROGRESS" ${t.status==="IN_PROGRESS"?"selected":""}>IN_PROGRESS</option>
+          <option value="RESOLVED" ${t.status==="RESOLVED"?"selected":""}>RESOLVED</option>
+        </select>
+        <button class="secondary statusBtn" data-id="${t.id}">Update</button>
+        <span class="muted" id="statusMsg-${t.id}"></span>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function assignTicket(id) {
+  const sel = document.querySelector(`select.assignSelect[data-id="${id}"]`);
+  const msg = document.getElementById(`assignMsg-${id}`);
+  const staffId = parseInt(sel.value || "0", 10);
+  if (!staffId) { msg.textContent = "choose staff"; return; }
+  msg.textContent = "assigning...";
+  const {res, out} = await api(`/api/tickets/${id}/assign`, {
+    method:'PATCH',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({staff_user_id: staffId})
+  });
+  if (!res.ok) { msg.textContent = out.error || 'error'; return; }
+  msg.textContent = "assigned";
+  fetchTickets();
+}
+
+async function updateStatus(id) {
+  const sel = document.querySelector(`select.statusSelect[data-id="${id}"]`);
+  const msg = document.getElementById(`statusMsg-${id}`);
+  msg.textContent = "updating...";
+  const {res, out} = await api(`/api/tickets/${id}/status`, {
+    method:'PATCH',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({status: sel.value})
+  });
+  if (!res.ok) { msg.textContent = out.error || 'error'; return; }
+  msg.textContent = "updated";
+  fetchTickets();
+}
+
+document.addEventListener('click', (e)=>{
+  if (e.target.classList.contains('assignBtn')) assignTicket(e.target.getAttribute('data-id'));
+  if (e.target.classList.contains('statusBtn')) updateStatus(e.target.getAttribute('data-id'));
+});
+
+document.getElementById('refreshTickets').addEventListener('click', fetchTickets);
+document.getElementById('refreshStaff').addEventListener('click', async ()=>{ await loadStaff(); fetchTickets(); });
+
+document.getElementById('logout').addEventListener('click', async ()=>{
+  await api('/api/auth/logout', {method:'POST'});
+  location.href='/login';
+});
+
+// Create user form
+document.getElementById('createUserForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const msg = document.getElementById('createUserMsg');
+  msg.textContent = "creating...";
+
+  const fd = new FormData(e.target);
+  const payload = {
+    role: fd.get('role'),
+    username: fd.get('username'),
+    password: fd.get('password'),
+    room: fd.get('room')
+  };
+
+  const {res, out} = await api('/api/admin/users', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) { msg.textContent = out.error || 'error'; return; }
+  msg.textContent = `created user #${out.user.id}`;
+  e.target.reset();
+  await loadStaff();
+  fetchTickets();
+});
+
+// role changes room field visibility
+document.querySelector('select[name="role"]').addEventListener('change', (e)=>{
+  document.getElementById('roomLabel').style.display = (e.target.value === 'GUEST') ? 'grid' : 'none';
+});
+document.getElementById('roomLabel').style.display = 'grid';
+
+// SSE
+const sseStatus = document.getElementById('sseStatus');
+const eventsEl = document.getElementById('events');
+function addEventLine(obj) {
+  const t = new Date().toLocaleTimeString();
+  const pretty = esc(JSON.stringify(obj));
+  eventsEl.innerHTML = `<div class="eventLine"><span class="muted">${t}</span> ${pretty}</div>` + eventsEl.innerHTML;
+}
+const es = new EventSource('/api/stream');
+es.onopen = () => { sseStatus.textContent = 'connected'; };
+es.onerror = () => { sseStatus.textContent = 'disconnected'; };
+es.onmessage = (e) => {
+  try { addEventLine(JSON.parse(e.data)); } catch { addEventLine({event:"invalid_json", raw:e.data}); }
+};
+
+(async ()=>{
+  await loadMe();
+  await loadStaff();
+  await fetchTickets();
+})();
+</script>
+{{ end }}

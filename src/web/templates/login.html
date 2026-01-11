@@ -1,0 +1,80 @@
+{{ define "login.html" }}
+<section class="card">
+  <h1>Login</h1>
+  <p class="muted">Use your username and password/PIN. Admin default: <b>admin</b> / <b>admin123</b>.</p>
+
+  <form id="loginForm" class="grid">
+    <label>
+      Username
+      <input name="username" placeholder="e.g. room-203 or staff-ali or admin" required />
+    </label>
+
+    <label>
+      Password / PIN
+      <input name="password" type="password" placeholder="••••••" required />
+    </label>
+
+    <div class="full">
+      <button type="submit">Login</button>
+      <button id="logoutBtn" type="button" class="secondary">Logout</button>
+      <span id="msg" class="muted"></span>
+    </div>
+  </form>
+
+  <div class="card subtle">
+    <h2>Quick checks</h2>
+    <ul class="muted">
+      <li><code>/api/me</code> shows the logged-in user</li>
+      <li>Guest creates tickets (room forced from session)</li>
+      <li>Admin assigns tickets to staff</li>
+      <li>Staff sees only assigned tickets</li>
+    </ul>
+  </div>
+</section>
+
+<script>
+async function me() {
+  const res = await fetch('/api/me');
+  if (!res.ok) return null;
+  return await res.json();
+}
+
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const msg = document.getElementById('msg');
+  msg.textContent = 'logging in...';
+
+  const fd = new FormData(e.target);
+  const payload = { username: fd.get('username'), password: fd.get('password') };
+
+  const res = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  });
+
+  const out = await res.json();
+  if (!res.ok) {
+    msg.textContent = out.error || 'login failed';
+    return;
+  }
+
+  const u = out.user;
+  msg.textContent = `logged in as ${u.username} (${u.role})`;
+  if (u.role === 'ADMIN') location.href = '/admin';
+  else if (u.role === 'STAFF') location.href = '/staff';
+  else location.href = '/';
+});
+
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  const res = await fetch('/api/auth/logout', {method:'POST'});
+  const out = await res.json();
+  document.getElementById('msg').textContent = out.status ? 'logged out' : 'logout failed';
+});
+
+(async () => {
+  const u = await me();
+  if (u) document.getElementById('msg').textContent = `already logged in as ${u.username} (${u.role})`;
+})();
+</script>
+{{ end }}

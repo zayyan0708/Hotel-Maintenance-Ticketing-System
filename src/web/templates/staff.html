@@ -1,0 +1,117 @@
+{{ define "staff.html" }}
+<section class="card">
+  <h1>Maintenance Staff Portal</h1>
+  <p class="muted">You will only see tickets assigned to you. You can update status on those tickets.</p>
+
+  <div class="row">
+    <div class="pill">You: <span id="me">loading…</span></div>
+    <div class="pill">SSE: <span id="sseStatus">connecting…</span></div>
+    <button id="logout" class="secondary">Logout</button>
+    <button id="refresh" class="secondary">Refresh</button>
+  </div>
+
+  <div class="grid2" style="margin-top:12px;">
+    <div>
+      <h2>Live Events</h2>
+      <div id="events" class="events"></div>
+    </div>
+
+    <div>
+      <h2>Your Assigned Tickets</h2>
+      <div id="tickets"></div>
+    </div>
+  </div>
+</section>
+
+<script>
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const out = await res.json().catch(()=> ({}));
+  return {res, out};
+}
+
+async function loadMe() {
+  const {res, out} = await api('/api/me');
+  if (!res.ok || out.role !== 'STAFF') { location.href='/login'; return; }
+  document.getElementById('me').textContent = `${out.username} (${out.role})`;
+}
+
+async function fetchTickets() {
+  const {res, out} = await api('/api/tickets');
+  const el = document.getElementById('tickets');
+  if (!res.ok) { el.innerHTML = `<p class="muted">${esc(out.error||'error')}</p>`; return; }
+  if (!Array.isArray(out) || out.length===0) { el.innerHTML='<p class="muted">No assigned tickets right now.</p>'; return; }
+
+  el.innerHTML = out.map(t => `
+    <div class="issue">
+      <div class="issue-head">
+        <div class="badge">${esc(t.type)}</div>
+        <div class="muted">#${t.id} • room ${esc(t.room)} • ${new Date(t.created_at).toLocaleString()}</div>
+        <div class="status">${esc(t.status)}</div>
+      </div>
+      <div class="issue-body">${esc(t.description)}</div>
+
+      <div class="row">
+        <label class="muted">Status</label>
+        <select data-id="${t.id}" class="statusSelect">
+          <option value="OPEN" ${t.status==="OPEN"?"selected":""}>OPEN</option>
+          <option value="IN_PROGRESS" ${t.status==="IN_PROGRESS"?"selected":""}>IN_PROGRESS</option>
+          <option value="RESOLVED" ${t.status==="RESOLVED"?"selected":""}>RESOLVED</option>
+        </select>
+        <button class="secondary statusBtn" data-id="${t.id}">Update</button>
+        <span class="muted" id="statusMsg-${t.id}"></span>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function updateStatus(id) {
+  const sel = document.querySelector(`select.statusSelect[data-id="${id}"]`);
+  const msg = document.getElementById(`statusMsg-${id}`);
+  msg.textContent = "updating...";
+  const {res, out} = await api(`/api/tickets/${id}/status`, {
+    method:'PATCH',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({status: sel.value})
+  });
+  if (!res.ok) { msg.textContent = out.error || 'error'; return; }
+  msg.textContent = "updated";
+  fetchTickets();
+}
+
+document.addEventListener('click', (e)=>{
+  if (e.target.classList.contains('statusBtn')) updateStatus(e.target.getAttribute('data-id'));
+});
+
+document.getElementById('refresh').addEventListener('click', fetchTickets);
+
+document.getElementById('logout').addEventListener('click', async ()=>{
+  await api('/api/auth/logout', {method:'POST'});
+  location.href='/login';
+});
+
+// SSE events
+const sseStatus = document.getElementById('sseStatus');
+const eventsEl = document.getElementById('events');
+function addEventLine(obj) {
+  const t = new Date().toLocaleTimeString();
+  const pretty = esc(JSON.stringify(obj));
+  eventsEl.innerHTML = `<div class="eventLine"><span class="muted">${t}</span> ${pretty}</div>` + eventsEl.innerHTML;
+}
+const es = new EventSource('/api/stream');
+es.onopen = () => { sseStatus.textContent = 'connected'; };
+es.onerror = () => { sseStatus.textContent = 'disconnected'; };
+es.onmessage = (e) => {
+  try { addEventLine(JSON.parse(e.data)); } catch { addEventLine({event:"invalid_json", raw:e.data}); }
+  // optional refresh on events
+  fetchTickets();
+};
+
+(async ()=>{
+  await loadMe();
+  await fetchTickets();
+})();
+</script>
+{{ end }}
