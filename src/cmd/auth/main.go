@@ -52,7 +52,7 @@ func main() {
 	logger := log.New(os.Stdout, "[auth] ", log.LstdFlags|log.Lmicroseconds)
 
 	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0o755); err != nil {
-		logger.Fatalf("mkdir auth_data: %v", err)
+		logger.Fatalf("mkdir data dir: %v", err)
 	}
 
 	db, err := sql.Open("sqlite", cfg.DBPath)

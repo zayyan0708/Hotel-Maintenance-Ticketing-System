@@ -41,7 +41,7 @@ func LoadGateway() GatewayConfig {
 func LoadAuth() AuthConfig {
 	return AuthConfig{
 		Addr:           getenv("AUTH_ADDR", ":8090"),
-		DBPath:         getenv("AUTH_DB_PATH", "./auth_data/auth.db"),
+		DBPath:         getenv("AUTH_DB_PATH", "./data/smarthotel_auth.db"),
 		InternalKey:    getenv("AUTH_INTERNAL_KEY", "dev-internal-key"),
 		BootstrapAdmin: true,
 		BootstrapUser:  getenv("AUTH_BOOTSTRAP_ADMIN_USER", "admin"),
