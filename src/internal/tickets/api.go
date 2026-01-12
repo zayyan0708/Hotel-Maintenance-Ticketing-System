@@ -46,6 +46,13 @@ type EventPayload struct {
 	AssignedTo *authclient.User `json:"assigned_to,omitempty"`
 }
 
+// --------------------
+// Chat request
+// --------------------
+type SendChatReq struct {
+	Message string `json:"message"`
+}
+
 func (a *API) ListTicketsForUser(w http.ResponseWriter, r *http.Request, u authclient.User) {
 	var items []Ticket
 	var err error
@@ -233,6 +240,125 @@ func (a *API) Assign(w http.ResponseWriter, r *http.Request, u authclient.User, 
 	writeJSON(w, http.StatusOK, t)
 }
 
+// --------------------
+// Chat endpoints
+// --------------------
+
+// ListChat: ADMIN can view any; STAFF only assigned; GUEST forbidden.
+func (a *API) ListChat(w http.ResponseWriter, r *http.Request, u authclient.User) {
+	ticketID, err := parseID(chi.URLParam(r, "id"))
+	if err != nil || ticketID <= 0 {
+		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	t, err := a.repo.Get(r.Context(), ticketID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	// Only admin or assigned staff can view chat
+	if u.Role == authclient.RoleAdmin {
+		// ok
+	} else if u.Role == authclient.RoleStaff {
+		if t.AssignedToUserID == nil || *t.AssignedToUserID != u.ID {
+			writeErr(w, http.StatusForbidden, "staff can view chat only for assigned tickets")
+			return
+		}
+	} else {
+		writeErr(w, http.StatusForbidden, "chat is for admin/staff only")
+		return
+	}
+
+	msgs, err := a.repo.ListChatMessages(r.Context(), ticketID, 200)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"messages": msgs})
+}
+
+// SendChat: ADMIN can chat any; STAFF only assigned; GUEST forbidden.
+func (a *API) SendChat(w http.ResponseWriter, r *http.Request, u authclient.User) {
+	ticketID, err := parseID(chi.URLParam(r, "id"))
+	if err != nil || ticketID <= 0 {
+		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	t, err := a.repo.Get(r.Context(), ticketID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	// Only admin or assigned staff can send chat
+	if u.Role == authclient.RoleAdmin {
+		// ok
+	} else if u.Role == authclient.RoleStaff {
+		if t.AssignedToUserID == nil || *t.AssignedToUserID != u.ID {
+			writeErr(w, http.StatusForbidden, "staff can chat only for assigned tickets")
+			return
+		}
+	} else {
+		writeErr(w, http.StatusForbidden, "chat is for admin/staff only")
+		return
+	}
+
+	var req SendChatReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if req.Message == "" {
+		writeErr(w, http.StatusBadRequest, "message is required")
+		return
+	}
+	if len(req.Message) > 500 {
+		writeErr(w, http.StatusBadRequest, "message too long (max 500)")
+		return
+	}
+
+	now := time.Now().UTC()
+
+	// Store message
+	_, err = a.repo.InsertChatMessage(r.Context(), ChatMessage{
+		TicketID:     ticketID,
+		FromUserID:   u.ID,
+		FromUsername: u.Username,
+		FromRole:     u.Role,
+		Message:      req.Message,
+		SentAt:       now,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	// Publish MQTT chat event
+	chatEvt := ChatEventPayload{
+		Event:        "chat_message",
+		TicketID:     ticketID,
+		FromUserID:   u.ID,
+		FromUsername: u.Username,
+		FromRole:     u.Role,
+		Message:      req.Message,
+		SentAt:       now,
+	}
+	a.publishChat(mq.ChatTopic(ticketID), chatEvt)
+
+	writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
+}
+
 func canView(u authclient.User, t Ticket) bool {
 	switch u.Role {
 	case authclient.RoleAdmin:
@@ -260,6 +386,23 @@ func (a *API) publish(topic string, payload EventPayload) {
 	tok.WaitTimeout(3 * time.Second)
 	if err := tok.Error(); err != nil {
 		a.logger.Printf("publish error topic=%s: %v", topic, err)
+	}
+}
+
+func (a *API) publishChat(topic string, payload ChatEventPayload) {
+	if a.mqtt == nil || !a.mqtt.IsConnected() {
+		a.logger.Printf("mqtt not connected; skipping publish topic=%s", topic)
+		return
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		a.logger.Printf("marshal chat: %v", err)
+		return
+	}
+	tok := a.mqtt.Publish(topic, 1, false, b)
+	tok.WaitTimeout(3 * time.Second)
+	if err := tok.Error(); err != nil {
+		a.logger.Printf("publish chat error topic=%s: %v", topic, err)
 	}
 }
 

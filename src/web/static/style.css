@@ -54,10 +54,15 @@ h1, h2 { margin: 0 0 10px 0; }
 }
 .grid .full { grid-column: 1 / -1; }
 
-.grid2 {
+.grid2{
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 420px);
+  gap: 16px;
+  align-items: start;
+}
+
+.grid2 > *{
+  min-width: 0; 
 }
 
 label { display: grid; gap: 6px; }

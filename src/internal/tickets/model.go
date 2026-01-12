@@ -31,3 +31,27 @@ func IsValidType(t string) bool {
 		return false
 	}
 }
+
+// --------------------
+// Chat (Option A)
+// --------------------
+
+type ChatMessage struct {
+	ID           int64     `json:"id"`
+	TicketID     int64     `json:"ticket_id"`
+	FromUserID   int64     `json:"from_user_id"`
+	FromUsername string    `json:"from_username"`
+	FromRole     string    `json:"from_role"`
+	Message      string    `json:"message"`
+	SentAt       time.Time `json:"sent_at"`
+}
+
+type ChatEventPayload struct {
+	Event        string    `json:"event"` // "chat_message"
+	TicketID     int64     `json:"ticket_id"`
+	FromUserID   int64     `json:"from_user_id"`
+	FromUsername string    `json:"from_username"`
+	FromRole     string    `json:"from_role"`
+	Message      string    `json:"message"`
+	SentAt       time.Time `json:"sent_at"`
+}

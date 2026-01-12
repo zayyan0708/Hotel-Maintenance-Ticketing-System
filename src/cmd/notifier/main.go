@@ -97,6 +97,9 @@ func main() {
 	subscribe(mq.TopicTicketStatusUpdated)
 	subscribe(mq.TopicTicketAssigned)
 
+	// ✅ Chat events
+	subscribe(mq.TopicChatTicketWildcard)
+
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
 	r.Use(middleware.RequestID)

@@ -182,7 +182,6 @@ func main() {
 			return
 		}
 		if u.Role != authclient.RoleGuest {
-			// redirect to correct portal
 			if u.Role == authclient.RoleAdmin {
 				http.Redirect(w, r, "/admin", http.StatusFound)
 				return
@@ -263,6 +262,25 @@ func main() {
 			ticketAPI.UpdateStatus(w, r, u)
 		})
 
+		// ✅ Chat (Option A)
+		r.Get("/tickets/{id}/chat", func(w http.ResponseWriter, r *http.Request) {
+			u, ok := currentUser(r, sessions)
+			if !ok {
+				writeErr(w, 401, "unauthorized")
+				return
+			}
+			ticketAPI.ListChat(w, r, u)
+		})
+
+		r.Post("/tickets/{id}/chat", func(w http.ResponseWriter, r *http.Request) {
+			u, ok := currentUser(r, sessions)
+			if !ok {
+				writeErr(w, 401, "unauthorized")
+				return
+			}
+			ticketAPI.SendChat(w, r, u)
+		})
+
 		// Admin-only assign
 		r.Patch("/tickets/{id}/assign", func(w http.ResponseWriter, r *http.Request) {
 			u, ok := currentUser(r, sessions)
@@ -275,7 +293,6 @@ func main() {
 				return
 			}
 
-			// Read staff_user_id first, then fetch staff list (simpler: validate using auth service list)
 			var req struct {
 				StaffUserID int64 `json:"staff_user_id"`
 			}
@@ -284,7 +301,6 @@ func main() {
 				return
 			}
 
-			// Validate staff exists by listing staff and matching ID (small N, acceptable)
 			staff, err := authC.ListUsersByRole(authclient.RoleStaff)
 			if err != nil {
 				writeErr(w, 502, "auth service unavailable")
@@ -303,13 +319,8 @@ func main() {
 				return
 			}
 
-			// Rewind body approach: easiest is to call a helper that assigns directly:
-			// We'll call repo.Assign here and publish event for correctness.
-			// But we already wrote tickets.API.Assign expecting assignedTo user:
-			// We'll simulate by reconstructing request for tickets API:
 			r.Body.Close()
-			// Create a new request body not needed, call API method with current assignedTo:
-			// For simplicity, call internal assign function:
+
 			assignedTicket, err := repo.Assign(r.Context(), mustParseID(chi.URLParam(r, "id")), req.StaffUserID)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
@@ -319,8 +330,7 @@ func main() {
 				writeErr(w, 500, "db error")
 				return
 			}
-			// publish mqtt
-			// reuse tickets API publish logic by direct publish here:
+
 			payload := tickets.EventPayload{
 				Event:      "assigned",
 				Ticket:     assignedTicket,
@@ -330,7 +340,7 @@ func main() {
 			writeJSON(w, 200, assignedTicket)
 		})
 
-		// Admin-only user management (creates guest/staff)
+		// Admin-only user management
 		r.Post("/admin/users", func(w http.ResponseWriter, r *http.Request) {
 			u, ok := currentUser(r, sessions)
 			if !ok || u.Role != authclient.RoleAdmin {
@@ -342,7 +352,6 @@ func main() {
 				writeErr(w, 400, "invalid json")
 				return
 			}
-			// basic validation
 			if req.Username == "" || req.Password == "" {
 				writeErr(w, 400, "username and password required")
 				return
@@ -397,12 +406,24 @@ func main() {
 	_ = srv.Shutdown(shutdownCtx)
 }
 
+// ✅ Now includes Chat wildcard AND sends SSE envelope {topic,payload}
 func subscribeAndBridge(logger *log.Logger, c mqtt.Client, hub *sse.Hub) {
-	topics := []string{mq.TopicTicketCreated, mq.TopicTicketStatusUpdated, mq.TopicTicketAssigned}
+	topics := []string{
+		mq.TopicTicketCreated,
+		mq.TopicTicketStatusUpdated,
+		mq.TopicTicketAssigned,
+		mq.TopicChatTicketWildcard, // ✅ chat
+	}
+
 	for _, topic := range topics {
 		topic := topic
 		token := c.Subscribe(topic, 1, func(_ mqtt.Client, msg mqtt.Message) {
-			hub.Broadcast(msg.Payload())
+			env := map[string]any{
+				"topic":   msg.Topic(),
+				"payload": json.RawMessage(append([]byte(nil), msg.Payload()...)),
+			}
+			b, _ := json.Marshal(env)
+			hub.Broadcast(b)
 		})
 		token.Wait()
 		if err := token.Error(); err != nil {

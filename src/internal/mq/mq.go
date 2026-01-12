@@ -2,6 +2,7 @@ package mq
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -12,6 +13,10 @@ const (
 	TopicTicketCreated       = "smarthotel/tickets/created"
 	TopicTicketStatusUpdated = "smarthotel/tickets/status_updated"
 	TopicTicketAssigned      = "smarthotel/tickets/assigned"
+
+	// Chat
+	TopicChatTicketPrefix   = "smarthotel/chat/ticket/"
+	TopicChatTicketWildcard = "smarthotel/chat/ticket/+"
 )
 
 type Config struct {
@@ -20,6 +25,9 @@ type Config struct {
 	Logger    *log.Logger
 }
 
+func ChatTopic(ticketID int64) string {
+	return fmt.Sprintf("%s%d", TopicChatTicketPrefix, ticketID)
+}
 func Connect(cfg Config) (mqtt.Client, error) {
 	if cfg.BrokerURL == "" {
 		return nil, errors.New("MQTT broker URL is empty")

@@ -1,7 +1,7 @@
 {{ define "staff.html" }}
 <section class="card">
   <h1>Maintenance Staff Portal</h1>
-  <p class="muted">You will only see tickets assigned to you. You can update status on those tickets.</p>
+  <p class="muted">You will only see tickets assigned to you. You can update status and chat with admin for those tickets.</p>
 
   <div class="row">
     <div class="pill">You: <span id="me">loading…</span></div>
@@ -38,6 +38,50 @@ async function loadMe() {
   document.getElementById('me').textContent = `${out.username} (${out.role})`;
 }
 
+function renderChatLine(m) {
+  const t = m.sent_at ? new Date(m.sent_at).toLocaleTimeString() : '';
+  return `<div class="eventLine">
+    <span class="muted">${esc(t)}</span>
+    <b>${esc(m.from_username || '')}</b>
+    <span class="muted">(${esc(m.from_role || '')})</span>:
+    ${esc(m.message || '')}
+  </div>`;
+}
+
+async function loadChat(ticketId) {
+  const box = document.getElementById(`chatBox-${ticketId}`);
+  const status = document.getElementById(`chatStatus-${ticketId}`);
+  if (!box) return;
+  status.textContent = 'loading chat...';
+
+  const {res, out} = await api(`/api/tickets/${ticketId}/chat`);
+  if (!res.ok) { status.textContent = out.error || 'chat error'; return; }
+
+  const msgs = out.messages || [];
+  box.innerHTML = msgs.map(renderChatLine).join('');
+  status.textContent = msgs.length ? '' : 'no messages yet';
+  box.scrollTop = box.scrollHeight;
+}
+
+async function sendChat(ticketId) {
+  const input = document.getElementById(`chatInput-${ticketId}`);
+  const status = document.getElementById(`chatStatus-${ticketId}`);
+  const msg = (input.value || '').trim();
+  if (!msg) { status.textContent = 'type a message'; return; }
+
+  status.textContent = 'sending...';
+  const {res, out} = await api(`/api/tickets/${ticketId}/chat`, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({message: msg})
+  });
+
+  if (!res.ok) { status.textContent = out.error || 'send failed'; return; }
+  input.value = '';
+  status.textContent = '';
+  await loadChat(ticketId);
+}
+
 async function fetchTickets() {
   const {res, out} = await api('/api/tickets');
   const el = document.getElementById('tickets');
@@ -63,8 +107,25 @@ async function fetchTickets() {
         <button class="secondary statusBtn" data-id="${t.id}">Update</button>
         <span class="muted" id="statusMsg-${t.id}"></span>
       </div>
+
+      <!-- Chat panel -->
+      <div class="card subtle" style="margin-top:10px;">
+        <div class="row" style="justify-content:space-between;">
+          <h3 style="margin:0;">Ticket Chat</h3>
+          <button class="secondary chatLoadBtn" data-id="${t.id}">Load</button>
+        </div>
+        <div id="chatBox-${t.id}" class="events" style="max-height:160px; overflow:auto;"></div>
+        <div class="row" style="margin-top:8px;">
+          <input id="chatInput-${t.id}" placeholder="Type a message…" style="flex:1;" />
+          <button class="secondary chatSendBtn" data-id="${t.id}">Send</button>
+        </div>
+        <div id="chatStatus-${t.id}" class="muted"></div>
+      </div>
     </div>
   `).join('');
+
+  // auto-load chat for first few tickets
+  out.slice(0, 3).forEach(t => loadChat(t.id));
 }
 
 async function updateStatus(id) {
@@ -83,6 +144,8 @@ async function updateStatus(id) {
 
 document.addEventListener('click', (e)=>{
   if (e.target.classList.contains('statusBtn')) updateStatus(e.target.getAttribute('data-id'));
+  if (e.target.classList.contains('chatLoadBtn')) loadChat(e.target.getAttribute('data-id'));
+  if (e.target.classList.contains('chatSendBtn')) sendChat(e.target.getAttribute('data-id'));
 });
 
 document.getElementById('refresh').addEventListener('click', fetchTickets);
@@ -100,12 +163,34 @@ function addEventLine(obj) {
   const pretty = esc(JSON.stringify(obj));
   eventsEl.innerHTML = `<div class="eventLine"><span class="muted">${t}</span> ${pretty}</div>` + eventsEl.innerHTML;
 }
+
+function handleIncoming(obj) {
+  if (obj && obj.topic && obj.payload) {
+    addEventLine(obj);
+
+    if (String(obj.topic).startsWith('smarthotel/chat/ticket/')) {
+      const p = obj.payload;
+      const ticketId = p.ticket_id;
+      const box = document.getElementById(`chatBox-${ticketId}`);
+      if (box) {
+        box.innerHTML += renderChatLine(p);
+        box.scrollTop = box.scrollHeight;
+        const st = document.getElementById(`chatStatus-${ticketId}`);
+        if (st) st.textContent = '';
+      }
+    }
+    return;
+  }
+  addEventLine(obj);
+}
+
 const es = new EventSource('/api/stream');
 es.onopen = () => { sseStatus.textContent = 'connected'; };
 es.onerror = () => { sseStatus.textContent = 'disconnected'; };
 es.onmessage = (e) => {
-  try { addEventLine(JSON.parse(e.data)); } catch { addEventLine({event:"invalid_json", raw:e.data}); }
-  // optional refresh on events
+  try { handleIncoming(JSON.parse(e.data)); }
+  catch { handleIncoming({event:"invalid_json", raw:e.data}); }
+  // optional refresh on non-chat events
   fetchTickets();
 };
 

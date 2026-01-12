@@ -53,6 +53,27 @@ CREATE INDEX IF NOT EXISTS idx_tickets_assigned ON tickets(assigned_to_user_id);
 			return err
 		}
 	}
+
+	// --------------------
+	// Chat messages table
+	// --------------------
+	_, err = db.Exec(`
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ticket_id INTEGER NOT NULL,
+  from_user_id INTEGER NOT NULL,
+  from_username TEXT NOT NULL,
+  from_role TEXT NOT NULL,
+  message TEXT NOT NULL,
+  sent_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_ticket_id ON chat_messages(ticket_id);
+CREATE INDEX IF NOT EXISTS idx_chat_sent_at ON chat_messages(sent_at);
+`)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -191,6 +212,56 @@ func (r *Repository) list(ctx context.Context, q string, args ...any) ([]Ticket,
 			t.AssignedToUserID = &v
 		}
 		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// --------------------
+// Chat repo methods
+// --------------------
+
+func (r *Repository) InsertChatMessage(ctx context.Context, m ChatMessage) (ChatMessage, error) {
+	res, err := r.db.ExecContext(ctx, `
+		INSERT INTO chat_messages(ticket_id, from_user_id, from_username, from_role, message, sent_at)
+		VALUES(?,?,?,?,?,?)
+	`, m.TicketID, m.FromUserID, m.FromUsername, m.FromRole, m.Message, m.SentAt.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	m.ID = id
+	return m, nil
+}
+
+func (r *Repository) ListChatMessages(ctx context.Context, ticketID int64, limit int) ([]ChatMessage, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, ticket_id, from_user_id, from_username, from_role, message, sent_at
+		FROM chat_messages
+		WHERE ticket_id=?
+		ORDER BY id ASC
+		LIMIT ?
+	`, ticketID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ChatMessage
+	for rows.Next() {
+		var m ChatMessage
+		var sent string
+		if err := rows.Scan(&m.ID, &m.TicketID, &m.FromUserID, &m.FromUsername, &m.FromRole, &m.Message, &sent); err != nil {
+			return nil, err
+		}
+		m.SentAt = parseTime(sent)
+		out = append(out, m)
 	}
 	return out, rows.Err()
 }
